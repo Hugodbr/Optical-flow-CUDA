@@ -9,47 +9,40 @@
 #include "filters/Filter.h"
 #include "filters/GrayscaleFilter.h"
 
-// ── CLI args parser ───────────────────────────────────────────────────────────
+#ifdef USE_CUDA
+#include <opencv2/core/cuda.hpp>
+#include "cuda/lucas_kanade.h"
+#endif
+
+// ── (parseArgs and FPSCounter unchanged from before) ─────────────────────────
 
 struct AppConfig {
-    std::string configPath = "config/camera.yaml";
-    std::string cameraOverride;     // overrides config file if set
-    bool listCameras = false;
+    std::string configPath     = "../config/camera.yaml";
+    std::string cameraOverride;
+    bool        listCameras    = false;
 };
 
 AppConfig parseArgs(int argc, char** argv) {
     AppConfig app;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-
-        if ((arg == "--camera" || arg == "-c") && i + 1 < argc) {
+        if ((arg == "--camera" || arg == "-c") && i + 1 < argc)
             app.cameraOverride = argv[++i];
-
-        } else if ((arg == "--config" || arg == "-f") && i + 1 < argc) {
+        else if ((arg == "--config" || arg == "-f") && i + 1 < argc)
             app.configPath = argv[++i];
-
-        } else if (arg == "--list" || arg == "-l") {
+        else if (arg == "--list" || arg == "-l")
             app.listCameras = true;
-
-        } else if (arg == "--help" || arg == "-h") {
+        else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Usage: optical_flow [options]\n"
-                << "  -c, --camera <src>   Camera source: index (0,1) or URL\n"
-                << "                       Examples:\n"
-                << "                         --camera 0          (built-in)\n"
-                << "                         --camera 1          (USB)\n"
-                << "                         --camera http://192.168.1.10:4747/video\n"
-                << "                         --camera rtsp://192.168.1.10:4747/h264_ulaw.sdp\n"
-                << "  -f, --config <path>  Path to camera.yaml (default: config/camera.yaml)\n"
-                << "  -l, --list           List available local camera devices\n"
-                << "  -h, --help           Show this message\n";
+                << "  -c, --camera <src>   Device index or stream URL\n"
+                << "  -f, --config <path>  Path to camera.yaml\n"
+                << "  -l, --list           List local /dev/video* devices\n";
             std::exit(0);
         }
     }
     return app;
 }
-
-// ── FPS counter ───────────────────────────────────────────────────────────────
 
 class FPSCounter {
 public:
@@ -57,11 +50,9 @@ public:
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - m_last).count();
         m_last = now;
-        m_fps  = 0.9 * m_fps + 0.1 * (1.0 / dt);  // exponential smoothing
+        m_fps  = 0.9 * m_fps + 0.1 * (1.0 / dt);
     }
-
     double get() const { return m_fps; }
-
 private:
     std::chrono::steady_clock::time_point m_last = std::chrono::steady_clock::now();
     double m_fps = 0.0;
@@ -77,52 +68,73 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Load config from YAML, then apply CLI override if given
-    CameraConfig camCfg = CameraCapture::fromYaml(app.configPath);
+#ifdef USE_CUDA
+    printCudaDeviceInfo();
+    LKConfig lkCfg;      // use defaults — tweak via config later
+#else
+    std::cout << "[main] CUDA not available — running grayscale CPU mode.\n";
+#endif
 
+    CameraConfig camCfg = CameraCapture::fromYaml(app.configPath);
     if (!app.cameraOverride.empty()) {
-        // Try to parse as integer index first, otherwise treat as URL
-        try {
-            camCfg.source = std::stoi(app.cameraOverride);
-        } catch (...) {
-            camCfg.source = app.cameraOverride;
-        }
+        try   { camCfg.source = std::stoi(app.cameraOverride); }
+        catch (...) { camCfg.source = app.cameraOverride; }
     }
 
-    // Open camera
     CameraCapture camera(camCfg);
     if (!camera.open()) {
-        std::cerr << "Fatal: cannot open camera. Run with --list to see devices.\n";
+        std::cerr << "Fatal: cannot open camera.\n";
         return -1;
     }
 
-    // Active filter — swap this out for Lucas-Kanade later
-    std::unique_ptr<Filter> filter = std::make_unique<GrayscaleFilter>();
-    std::cout << "Active filter: " << filter->name() << "\n";
-
     cv::namedWindow("Optical Flow", cv::WINDOW_AUTOSIZE);
-    cv::Mat frame;
+    cv::Mat   frame, grayFrame, displayFrame;
     FPSCounter fps;
 
+#ifdef USE_CUDA
+    cv::cuda::GpuMat d_prev, d_curr, d_vis;
+    bool firstFrame = true;
+#else
+    std::unique_ptr<Filter> filter = std::make_unique<GrayscaleFilter>();
+#endif
+
     while (true) {
-        if (!camera.read(frame) || frame.empty()) {
-            std::cerr << "Warning: empty frame received.\n";
-            continue;
+        if (!camera.read(frame) || frame.empty()) continue;
+
+#ifdef USE_CUDA
+        // Convert to grayscale for the LK algorithm
+        cv::cvtColor(frame, grayFrame, cv::COLOR_BGR2GRAY);
+        d_curr.upload(grayFrame);
+
+        if (firstFrame) {
+            // First frame: nothing to diff against — show blank
+            d_curr.copyTo(d_prev);
+            displayFrame = frame.clone();
+            firstFrame = false;
+        } else {
+            runLucasKanade(d_prev, d_curr, d_vis, lkCfg);
+            d_vis.download(displayFrame);
         }
 
-        cv::Mat output = filter->apply(frame);
+        // Roll: current becomes previous
+        d_curr.copyTo(d_prev);
+#else
+        displayFrame = filter->apply(frame);
+#endif
 
         fps.tick();
+        cv::putText(displayFrame,
+                    "FPS: " + std::to_string(static_cast<int>(fps.get())),
+                    {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 1.0, {0, 255, 0}, 2);
 
-        // Overlay FPS
-        std::string fpsText = "FPS: " + std::to_string(static_cast<int>(fps.get()));
-        cv::putText(output, fpsText, {10, 30},
-                    cv::FONT_HERSHEY_SIMPLEX, 1.0, {0, 255, 0}, 2);
+#ifdef USE_CUDA
+        cv::putText(displayFrame, "Lucas-Kanade (CUDA)",
+                    {10, 65}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {0, 200, 255}, 2);
+#endif
 
-        cv::imshow("Optical Flow", output);
-
+        cv::imshow("Optical Flow", displayFrame);
         char key = static_cast<char>(cv::waitKey(1));
-        if (key == 'q' || key == 27) break;   // q or ESC to quit
+        if (key == 'q' || key == 27) break;
     }
 
     camera.release();
