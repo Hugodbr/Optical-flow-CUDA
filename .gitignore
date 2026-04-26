@@ -1,6 +1,11 @@
-*.i
-*.ii
-*.gpu
-*.ptx
-*.cubin
-*.fatbin
+build/
+*.o
+*.a
+*.so
+*.out
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+compile_commands.json
+docs/benchmark_results.csv
