@@ -1,82 +1,99 @@
 #!/bin/bash
 set -e
 
-# ── Check if already installed ────────────────────────────────────────────────
-if ls /usr/local/lib/libopencv_cuda* 1>/dev/null 2>&1; then
-    echo "=== OpenCV with CUDA already installed — skipping. ==="
-    echo "    Delete /usr/local/lib/libopencv_* to force a rebuild."
-    exit 0
-fi
+# ── Detect package manager ────────────────────────────────────────────────────
+detect_pkg_manager() {
+    if   command -v apt-get &>/dev/null; then echo "apt"
+    elif command -v dnf     &>/dev/null; then echo "dnf"
+    elif command -v pacman  &>/dev/null; then echo "pacman"
+    else echo "unknown"
+    fi
+}
 
-# ── Clone if needed ───────────────────────────────────────────────────────────
-OPENCV_VERSION="4.10.0"
+PKG_MANAGER=$(detect_pkg_manager)
+echo "  Package manager: ${PKG_MANAGER}"
 
-if [ ! -d ~/opencv ]; then
-    echo "=== Cloning OpenCV ${OPENCV_VERSION} ==="
-    git clone --branch ${OPENCV_VERSION} --depth 1 \
-        https://github.com/opencv/opencv.git ~/opencv
-else
-    echo "=== ~/opencv already exists — skipping clone ==="
-fi
+# ── Install GStreamer deps ─────────────────────────────────────────────────────
+install_gstreamer() {
+    case "${PKG_MANAGER}" in
+        apt)
+            sudo apt-get install -y \
+                libgstreamer1.0-dev \
+                libgstreamer-plugins-base1.0-dev \
+                libgstreamer-plugins-good1.0-dev \
+                gstreamer1.0-plugins-bad \
+                gstreamer1.0-libav
+            ;;
+        dnf)
+            # Fedora / RHEL / CentOS
+            sudo dnf install -y \
+                gstreamer1-devel \
+                gstreamer1-plugins-base-devel \
+                gstreamer1-plugins-good \
+                gstreamer1-plugins-bad-free \
+                gstreamer1-libav
+            ;;
+        pacman)
+            # Arch / Manjaro
+            sudo pacman -S --noconfirm \
+                gstreamer \
+                gst-plugins-base \
+                gst-plugins-good \
+                gst-plugins-bad \
+                gst-libav
+            ;;
+        *)
+            echo "WARNING: Unknown package manager — skipping GStreamer install."
+            echo "  Install GStreamer dev libraries manually for your distro."
+            ;;
+    esac
+}
 
-if [ ! -d ~/opencv_contrib ]; then
-    echo "=== Cloning opencv_contrib ${OPENCV_VERSION} ==="
-    git clone --branch ${OPENCV_VERSION} --depth 1 \
-        https://github.com/opencv/opencv_contrib.git ~/opencv_contrib
-else
-    echo "=== ~/opencv_contrib already exists — skipping clone ==="
-fi
+# ── Install cuDNN ─────────────────────────────────────────────────────────────
+install_cudnn() {
+    case "${PKG_MANAGER}" in
+        apt)
+            # Ubuntu / Debian — NVIDIA provides apt packages
+            sudo apt-get install -y \
+                "libcudnn9-cuda-${CUDA_MAJOR}" \
+                "libcudnn9-dev-cuda-${CUDA_MAJOR}" 2>/dev/null || return 1
+            ;;
+        dnf)
+            # Fedora — NVIDIA repo needed, no clean package name
+            echo "  INFO: For Fedora, install cuDNN manually from:"
+            echo "  https://developer.nvidia.com/cudnn-downloads"
+            return 1
+            ;;
+        pacman)
+            # Arch — available in AUR
+            if command -v yay &>/dev/null; then
+                yay -S --noconfirm cudnn
+            elif command -v paru &>/dev/null; then
+                paru -S --noconfirm cudnn
+            else
+                echo "  INFO: Install cuDNN from AUR: yay -S cudnn"
+                return 1
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
 
-# ── Configure ─────────────────────────────────────────────────────────────────
-mkdir -p ~/opencv/build && cd ~/opencv/build
+# ── Add NVIDIA repo (apt only) ────────────────────────────────────────────────
+add_nvidia_repo() {
+    if [ "${PKG_MANAGER}" != "apt" ]; then
+        echo "  Skipping NVIDIA repo setup (not apt-based)."
+        return 1
+    fi
 
-echo "=== Configuring OpenCV with CUDA ==="
-cmake ~/opencv \
-    -D CMAKE_BUILD_TYPE=RELEASE \
-    -D CMAKE_INSTALL_PREFIX=/usr/local \
-    -D OPENCV_EXTRA_MODULES_PATH=~/opencv_contrib/modules \
-    -D WITH_CUDA=ON \
-    -D CUDA_ARCH_BIN="8.9" \
-    -D WITH_CUDNN=OFF \
-    -D OPENCV_DNN_CUDA=OFF \
-    -D ENABLE_FAST_MATH=ON \
-    -D WITH_GSTREAMER=ON \
-    -D WITH_V4L=ON \
-    -D BUILD_opencv_python3=ON \
-    -D PYTHON3_EXECUTABLE=$(which python3) \
-    -D BUILD_EXAMPLES=OFF \
-    -D BUILD_TESTS=OFF
+    UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "22.04")
+    ARCH=$(dpkg --print-architecture)
+    KEYRING_PKG="cuda-keyring_1.1-1_all.deb"
+    KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION//./}/${ARCH}/${KEYRING_PKG}"
 
-# ── Verify CUDA is in the cache before spending 40 min compiling ──────────────
-echo ""
-echo "=== Verifying CUDA in CMakeCache ==="
-if ! grep -q "WITH_CUDA:BOOL=ON" ~/opencv/build/CMakeCache.txt; then
-    echo "ERROR: CUDA not enabled in CMakeCache."
-    echo "  nvcc path: $(which nvcc 2>/dev/null || echo 'NOT FOUND')"
-    echo "  If nvcc is missing, add to ~/.bashrc:"
-    echo "    export PATH=/usr/local/cuda/bin:\$PATH"
-    echo "    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\$LD_LIBRARY_PATH"
-    exit 1
-fi
-echo "  CUDA enabled ✓"
-
-# ── Compile ───────────────────────────────────────────────────────────────────
-echo ""
-echo "=== Compiling OpenCV (this takes 20-40 min) ==="
-make -j$(nproc)
-sudo make install
-sudo ldconfig
-
-# ── Final verification ────────────────────────────────────────────────────────
-echo ""
-echo "=== Verifying installation ==="
-python3 -c "
-import cv2
-info = cv2.getBuildInformation()
-for line in info.splitlines():
-    if any(k in line for k in ['CUDA', 'cuDNN', 'GStreamer', 'V4L']):
-        print(line)
-"
-ls /usr/local/lib/libopencv_cuda* | head -3
-echo ""
-echo "=== OpenCV with CUDA installed successfully ==="
+    wget -q -O /tmp/${KEYRING_PKG} "${KEYRING_URL}" || return 1
+    sudo dpkg -i /tmp/${KEYRING_PKG}
+    sudo apt-get update -qq
+}

@@ -1,16 +1,14 @@
 # First install deps
 
-bash scripts/install_deps.sh
+1) bash scripts/install_deps.sh
 
-bash scripts/build_opencv.sh
+2) bash scripts/build_opencv.sh
 
-# On Ubuntu:
+# On linux:
 
-~/droidcam$ droidcam-cli adb 4747      # step for using android cam only
+3) bash scripts/linux/build.sh
 
-bash scripts/ubuntu/build.sh
-
-bash scripts/ubuntu/run.sh 0
+4) bash scripts/linux/run.sh 0         # gets camera 0
 
 # On Jetson:
 
@@ -19,3 +17,7 @@ bash scripts/jetson/build.sh           # build (auto-detects arch)
 bash scripts/jetson/run.sh             # run with onboard cam + max power
 
 OPTICAL_FLOW_POWER_MODE=2 bash scripts/jetson/run.sh  # run at 15W mode
+
+# For android camera 
+
+~/droidcam$ droidcam-cli adb 4747      # step for using android cam only
