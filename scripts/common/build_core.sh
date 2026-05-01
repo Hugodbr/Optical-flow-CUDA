@@ -16,9 +16,11 @@ if [ -z "$CUDA_ARCH" ]; then
 fi
 
 # ── Verify OpenCV CUDA is installed ──────────────────────────────────────────
-if ! ls /usr/local/lib/libopencv_cuda* 1>/dev/null 2>&1; then
-    echo "ERROR: OpenCV CUDA libraries not found."
-    echo "  Run scripts/build_opencv.sh first."
+# JetPack installs to /usr/lib/aarch64-linux-gnu/; source builds go to /usr/local/lib/
+if ! ls /usr/local/lib/libopencv_cuda* /usr/lib/aarch64-linux-gnu/libopencv_cuda* 1>/dev/null 2>&1; then
+    echo "ERROR: OpenCV CUDA libraries not found in /usr/local/lib/ or /usr/lib/aarch64-linux-gnu/"
+    echo "  On Jetson: sudo apt install libopencv-dev  (if JetPack OpenCV has CUDA support)"
+    echo "  Otherwise: build from source with WITH_CUDA=ON"
     exit 1
 fi
 echo "  OpenCV CUDA libraries found ✓"

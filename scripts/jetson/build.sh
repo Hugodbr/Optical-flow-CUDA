@@ -28,8 +28,18 @@ echo "    Camera:    onboard (CSI/USB)"
 echo ""
 
 export CUDA_ARCH="${ARCH}"
-export OPENCV_DIR="/usr/local/lib/cmake/opencv4"
 export BUILD_TYPE="${1:-Release}"
+
+# Prefer a from-source build; fall back to the JetPack system install
+if [ -f "/usr/local/lib/cmake/opencv4/OpenCVConfig.cmake" ]; then
+    export OPENCV_DIR="/usr/local/lib/cmake/opencv4"
+elif [ -f "/usr/lib/aarch64-linux-gnu/cmake/opencv4/OpenCVConfig.cmake" ]; then
+    export OPENCV_DIR="/usr/lib/aarch64-linux-gnu/cmake/opencv4"
+else
+    echo "ERROR: OpenCV CMake config not found. Install OpenCV with CUDA support."
+    exit 1
+fi
+echo "    OpenCV:    ${OPENCV_DIR}"
 
 bash scripts/common/build_core.sh
 
