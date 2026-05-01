@@ -9,7 +9,7 @@ cd "${PROJECT_ROOT}"
 detect_jetson_arch() {
     if [ -f /proc/device-tree/model ]; then
         MODEL=$(cat /proc/device-tree/model 2>/dev/null)
-        echo "    Detected: ${MODEL}"
+        echo "    Detected: ${MODEL}" >&2
         case "$MODEL" in
             *"Orin"*)   echo "87" ;;   # Orin NX / AGX Orin
             *"Xavier"*) echo "72" ;;   # Xavier NX / AGX Xavier

@@ -18,10 +18,12 @@ fi
 # ── Verify OpenCV has CUDA support (cv::cuda::GpuMat must be available) ──────
 # libopencv_cuda* does not exist as a separate file on JetPack installs —
 # GpuMat lives inside libopencv_core when built with CUDA.
-if ! python3 -c "import cv2; assert hasattr(cv2, 'cuda') and hasattr(cv2.cuda, 'GpuMat')" 2>/dev/null; then
-    echo "ERROR: OpenCV CUDA support not found."
-    echo "  Check: python3 -c \"import cv2; print(cv2.getBuildInformation())\" | grep -i cuda"
-    echo "  You may need to build OpenCV from source with -D WITH_CUDA=ON"
+CUDA_IN_OPENCV=$(python3 -c "import cv2; info=cv2.getBuildInformation(); print('YES' if 'CUDA' in info and 'YES' in info[info.find('CUDA'):info.find('CUDA')+60] else 'NO')" 2>/dev/null || echo "NO")
+if [ "${CUDA_IN_OPENCV}" != "YES" ]; then
+    echo "ERROR: OpenCV was not built with CUDA support."
+    echo "  The apt package does not include CUDA. Build from source:"
+    echo "    export CUDA_ARCH_BIN=87"
+    echo "    bash scripts/install_opencv.sh"
     exit 1
 fi
 echo "  OpenCV CUDA support found ✓"
