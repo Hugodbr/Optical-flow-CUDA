@@ -24,7 +24,7 @@ add_executable(optical_flow
     src/cuda/lucas_kanade.cu
 )
 
-target_include_directories(optical_flow PRIVATE src)
+target_include_directories(optical_flow PRIVATE src ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 target_link_libraries(optical_flow ${OpenCV_LIBS} cuda cudart)
 
 set_target_properties(optical_flow PROPERTIES
