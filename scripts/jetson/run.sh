@@ -21,8 +21,8 @@ fi
 INPUT="$1"
 OUTPUT="${2:-output.avi}"
 
-echo "=== Setting Jetson power mode: max performance ==="
-bash scripts/jetson/set_power_mode.sh 0
+# echo "=== Setting Jetson power mode: max performance ==="
+# bash scripts/jetson/set_power_mode.sh 0
 
 echo ""
 echo "=== Lucas-Kanade optical flow (CUDA) ==="
