@@ -15,6 +15,21 @@ if [ -z "$CUDA_ARCH" ]; then
     exit 1
 fi
 
+# ── Locate nvcc ───────────────────────────────────────────────────────────────
+# On Jetson, /usr/local/cuda/bin is not always in PATH — find and export it.
+if ! command -v nvcc &>/dev/null; then
+    NVCC_PATH=$(find /usr/local/cuda* -name "nvcc" 2>/dev/null | head -1)
+    if [ -z "${NVCC_PATH}" ]; then
+        echo "ERROR: nvcc not found. Is the CUDA toolkit installed?"
+        echo "  Expected at: /usr/local/cuda/bin/nvcc"
+        exit 1
+    fi
+    export PATH="$(dirname ${NVCC_PATH}):${PATH}"
+    echo "  nvcc:      ${NVCC_PATH}"
+else
+    echo "  nvcc:      $(which nvcc)"
+fi
+
 # ── Verify standard OpenCV is installed (video I/O only, no CUDA needed) ─────
 if ! python3 -c "import cv2" 2>/dev/null; then
     echo "ERROR: OpenCV Python bindings not found."
