@@ -1,143 +1,110 @@
 #include <iostream>
 #include <string>
-#include <memory>
 #include <chrono>
 
 #include <opencv2/opencv.hpp>
-
-#include "camera/CameraCapture.h"
-#include "filters/Filter.h"
-#include "filters/GrayscaleFilter.h"
-
-#ifdef USE_CUDA
 #include <opencv2/core/cuda.hpp>
-#include "cuda/lucas_kanade.h"
-#endif
 
-// ── (parseArgs and FPSCounter unchanged from before) ─────────────────────────
+#include "cuda/lucas_kanade.h"
 
 struct AppConfig {
-    std::string configPath     = "../config/camera.yaml";
-    std::string cameraOverride;
-    bool        listCameras    = false;
+    std::string inputPath;
+    std::string outputPath = "output.avi";
 };
 
 AppConfig parseArgs(int argc, char** argv) {
-    AppConfig app;
+    AppConfig cfg;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if ((arg == "--camera" || arg == "-c") && i + 1 < argc)
-            app.cameraOverride = argv[++i];
-        else if ((arg == "--config" || arg == "-f") && i + 1 < argc)
-            app.configPath = argv[++i];
-        else if (arg == "--list" || arg == "-l")
-            app.listCameras = true;
+        if ((arg == "--input" || arg == "-i") && i + 1 < argc)
+            cfg.inputPath = argv[++i];
+        else if ((arg == "--output" || arg == "-o") && i + 1 < argc)
+            cfg.outputPath = argv[++i];
         else if (arg == "--help" || arg == "-h") {
             std::cout
-                << "Usage: optical_flow [options]\n"
-                << "  -c, --camera <src>   Device index or stream URL\n"
-                << "  -f, --config <path>  Path to camera.yaml\n"
-                << "  -l, --list           List local /dev/video* devices\n";
+                << "Usage: optical_flow -i <input_video> [-o <output_video>]\n"
+                << "  -i, --input  <path>   Input video file\n"
+                << "  -o, --output <path>   Output video file (default: output.avi)\n";
             std::exit(0);
         }
     }
-    return app;
+    return cfg;
 }
-
-class FPSCounter {
-public:
-    void tick() {
-        auto now = std::chrono::steady_clock::now();
-        double dt = std::chrono::duration<double>(now - m_last).count();
-        m_last = now;
-        m_fps  = 0.9 * m_fps + 0.1 * (1.0 / dt);
-    }
-    double get() const { return m_fps; }
-private:
-    std::chrono::steady_clock::time_point m_last = std::chrono::steady_clock::now();
-    double m_fps = 0.0;
-};
-
-// ── Main ──────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
     AppConfig app = parseArgs(argc, argv);
 
-    if (app.listCameras) {
-        CameraCapture::listAvailableDevices();
-        return 0;
-    }
-
-#ifdef USE_CUDA
-    printCudaDeviceInfo();
-    LKConfig lkCfg;      // use defaults — tweak via config later
-#else
-    std::cout << "[main] CUDA not available — running grayscale CPU mode.\n";
-#endif
-
-    CameraConfig camCfg = CameraCapture::fromYaml(app.configPath);
-    if (!app.cameraOverride.empty()) {
-        try   { camCfg.source = std::stoi(app.cameraOverride); }
-        catch (...) { camCfg.source = app.cameraOverride; }
-    }
-
-    CameraCapture camera(camCfg);
-    if (!camera.open()) {
-        std::cerr << "Fatal: cannot open camera.\n";
+    if (app.inputPath.empty()) {
+        std::cerr << "Error: no input video. Use -i <path>\n";
         return -1;
     }
 
-    cv::namedWindow("Optical Flow", cv::WINDOW_AUTOSIZE);
-    cv::Mat   frame, grayFrame, displayFrame;
-    FPSCounter fps;
+    printCudaDeviceInfo();
 
-#ifdef USE_CUDA
+    cv::VideoCapture cap(app.inputPath);
+    if (!cap.isOpened()) {
+        std::cerr << "Fatal: cannot open video: " << app.inputPath << "\n";
+        return -1;
+    }
+
+    const int    width  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    const int    height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    const double fps    = cap.get(cv::CAP_PROP_FPS);
+    const int    total  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+
+    std::cout << "Input:  " << app.inputPath
+              << " (" << width << "x" << height
+              << " @ " << fps << " fps, " << total << " frames)\n"
+              << "Output: " << app.outputPath << "\n\n";
+
+    cv::VideoWriter writer(
+        app.outputPath,
+        cv::VideoWriter::fourcc('M','J','P','G'),
+        fps,
+        {width, height}
+    );
+    if (!writer.isOpened()) {
+        std::cerr << "Fatal: cannot open output: " << app.outputPath << "\n";
+        return -1;
+    }
+
+    LKConfig lkCfg;
     cv::cuda::GpuMat d_prev, d_curr, d_vis;
+    cv::Mat frame, gray, output;
     bool firstFrame = true;
-#else
-    std::unique_ptr<Filter> filter = std::make_unique<GrayscaleFilter>();
-#endif
+    int  frameIdx   = 0;
 
-    while (true) {
-        if (!camera.read(frame) || frame.empty()) continue;
+    auto t0 = std::chrono::steady_clock::now();
 
-#ifdef USE_CUDA
-        // Convert to grayscale for the LK algorithm
-        cv::cvtColor(frame, grayFrame, cv::COLOR_BGR2GRAY);
-        d_curr.upload(grayFrame);
+    while (cap.read(frame)) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        d_curr.upload(gray);
 
         if (firstFrame) {
-            // First frame: nothing to diff against — show blank
             d_curr.copyTo(d_prev);
-            displayFrame = frame.clone();
+            output = cv::Mat::zeros(height, width, CV_8UC3);
             firstFrame = false;
         } else {
             runLucasKanade(d_prev, d_curr, d_vis, lkCfg);
-            d_vis.download(displayFrame);
+            d_vis.download(output);
         }
 
-        // Roll: current becomes previous
         d_curr.copyTo(d_prev);
-#else
-        displayFrame = filter->apply(frame);
-#endif
+        writer.write(output);
 
-        fps.tick();
-        cv::putText(displayFrame,
-                    "FPS: " + std::to_string(static_cast<int>(fps.get())),
-                    {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 1.0, {0, 255, 0}, 2);
-
-#ifdef USE_CUDA
-        cv::putText(displayFrame, "Lucas-Kanade (CUDA)",
-                    {10, 65}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {0, 200, 255}, 2);
-#endif
-
-        cv::imshow("Optical Flow", displayFrame);
-        char key = static_cast<char>(cv::waitKey(1));
-        if (key == 'q' || key == 27) break;
+        ++frameIdx;
+        if (frameIdx % 30 == 0 || frameIdx == total) {
+            auto elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            std::cout << "\r  Frame " << frameIdx << "/" << total
+                      << "  (" << static_cast<int>(frameIdx / elapsed) << " fps)"
+                      << std::flush;
+        }
     }
 
-    camera.release();
-    cv::destroyAllWindows();
+    std::cout << "\nDone. " << frameIdx << " frames -> " << app.outputPath << "\n";
+
+    cap.release();
+    writer.release();
     return 0;
 }
