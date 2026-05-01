@@ -21,6 +21,7 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 
 add_executable(optical_flow
     src/main.cpp
+    src/logger.cpp
     src/cuda/lucas_kanade.cu
 )
 

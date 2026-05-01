@@ -8,9 +8,17 @@ struct LKConfig {
     float maxFlow      = 20.f;
 };
 
+struct LKTiming {
+    float sobelMs    = 0.f;
+    float temporalMs = 0.f;
+    float lkMs       = 0.f;
+    float colorMs    = 0.f;
+};
+
 // prev, curr  — contiguous grayscale device buffers (width × height bytes)
 // flowVis     — contiguous BGR device buffer (width × height × 3 bytes)
-void runLucasKanade(
+// Returns per-kernel wall times measured with CUDA events (milliseconds)
+LKTiming runLucasKanade(
     const unsigned char* prev,
     const unsigned char* curr,
     unsigned char*       flowVis,

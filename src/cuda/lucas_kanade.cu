@@ -260,38 +260,69 @@ static GpuBuffers g_bufs;
 // Host-side entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-void runLucasKanade(
+// CUDA event pair — created once, reused every frame
+static cudaEvent_t s_eStart = nullptr;
+static cudaEvent_t s_eStop  = nullptr;
+
+static float timeKernel(cudaEvent_t eStart, cudaEvent_t eStop) {
+    float ms = 0.f;
+    cudaEventSynchronize(eStop);
+    cudaEventElapsedTime(&ms, eStart, eStop);
+    return ms;
+}
+
+LKTiming runLucasKanade(
     const unsigned char* prev,
     const unsigned char* curr,
     unsigned char*       flowVis,
     int width, int height,
     const LKConfig& cfg
 ) {
+    if (!s_eStart) {
+        CUDA_CHECK(cudaEventCreate(&s_eStart));
+        CUDA_CHECK(cudaEventCreate(&s_eStop));
+    }
+
     g_bufs.allocate(width, height);
 
     dim3 block(BLOCK, BLOCK);
     dim3 grid((width + BLOCK - 1) / BLOCK, (height + BLOCK - 1) / BLOCK);
 
+    LKTiming timing;
+
+    cudaEventRecord(s_eStart);
     sobelKernel<<<grid, block>>>(curr, g_bufs.Ix, g_bufs.Iy, width, height);
+    cudaEventRecord(s_eStop);
     CUDA_CHECK(cudaGetLastError());
+    timing.sobelMs = timeKernel(s_eStart, s_eStop);
 
+    cudaEventRecord(s_eStart);
     temporalKernel<<<grid, block>>>(prev, curr, g_bufs.It, width, height);
+    cudaEventRecord(s_eStop);
     CUDA_CHECK(cudaGetLastError());
+    timing.temporalMs = timeKernel(s_eStart, s_eStop);
 
+    cudaEventRecord(s_eStart);
     lucasKanadeKernel<<<grid, block>>>(
         g_bufs.Ix, g_bufs.Iy, g_bufs.It,
         g_bufs.flowX, g_bufs.flowY,
         width, height, cfg.windowSize / 2, cfg.detThreshold
     );
+    cudaEventRecord(s_eStop);
     CUDA_CHECK(cudaGetLastError());
+    timing.lkMs = timeKernel(s_eStart, s_eStop);
 
+    cudaEventRecord(s_eStart);
     // flowVis is the caller's device buffer — write directly into it
     flowToColorKernel<<<grid, block>>>(
         g_bufs.flowX, g_bufs.flowY, flowVis, width, height, cfg.maxFlow
     );
+    cudaEventRecord(s_eStop);
     CUDA_CHECK(cudaGetLastError());
+    timing.colorMs = timeKernel(s_eStart, s_eStop);
 
     CUDA_CHECK(cudaDeviceSynchronize());
+    return timing;
 }
 
 
