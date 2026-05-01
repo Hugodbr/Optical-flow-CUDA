@@ -31,11 +31,18 @@ export CUDA_ARCH="${ARCH}"
 export BUILD_TYPE="${1:-Release}"
 
 # Prefer a from-source build; fall back to the JetPack system install
-if [ -f "/usr/local/lib/cmake/opencv4/OpenCVConfig.cmake" ]; then
-    export OPENCV_DIR="/usr/local/lib/cmake/opencv4"
-elif [ -f "/usr/lib/aarch64-linux-gnu/cmake/opencv4/OpenCVConfig.cmake" ]; then
-    export OPENCV_DIR="/usr/lib/aarch64-linux-gnu/cmake/opencv4"
-else
+for candidate in \
+    "/usr/local/lib/cmake/opencv4" \
+    "/usr/lib/aarch64-linux-gnu/cmake/opencv4" \
+    "/usr/lib/cmake/opencv4"
+do
+    if [ -f "${candidate}/OpenCVConfig.cmake" ]; then
+        export OPENCV_DIR="${candidate}"
+        break
+    fi
+done
+
+if [ -z "${OPENCV_DIR}" ]; then
     echo "ERROR: OpenCV CMake config not found. Install OpenCV with CUDA support."
     exit 1
 fi
@@ -45,5 +52,4 @@ bash scripts/common/build_core.sh
 
 echo ""
 echo "=== Run options ==="
-echo "  Onboard cam:  bash scripts/jetson/run.sh"
-echo "  USB cam:      ./build/optical_flow --camera 1"
+echo "  Video:  bash scripts/jetson/run.sh input.mp4 output.avi"

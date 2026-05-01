@@ -15,15 +15,16 @@ if [ -z "$CUDA_ARCH" ]; then
     exit 1
 fi
 
-# ── Verify OpenCV CUDA is installed ──────────────────────────────────────────
-# JetPack installs to /usr/lib/aarch64-linux-gnu/; source builds go to /usr/local/lib/
-if ! ls /usr/local/lib/libopencv_cuda* /usr/lib/aarch64-linux-gnu/libopencv_cuda* 1>/dev/null 2>&1; then
-    echo "ERROR: OpenCV CUDA libraries not found in /usr/local/lib/ or /usr/lib/aarch64-linux-gnu/"
-    echo "  On Jetson: sudo apt install libopencv-dev  (if JetPack OpenCV has CUDA support)"
-    echo "  Otherwise: build from source with WITH_CUDA=ON"
+# ── Verify OpenCV has CUDA support (cv::cuda::GpuMat must be available) ──────
+# libopencv_cuda* does not exist as a separate file on JetPack installs —
+# GpuMat lives inside libopencv_core when built with CUDA.
+if ! python3 -c "import cv2; assert hasattr(cv2, 'cuda') and hasattr(cv2.cuda, 'GpuMat')" 2>/dev/null; then
+    echo "ERROR: OpenCV CUDA support not found."
+    echo "  Check: python3 -c \"import cv2; print(cv2.getBuildInformation())\" | grep -i cuda"
+    echo "  You may need to build OpenCV from source with -D WITH_CUDA=ON"
     exit 1
 fi
-echo "  OpenCV CUDA libraries found ✓"
+echo "  OpenCV CUDA support found ✓"
 
 # ── CMake + Make ──────────────────────────────────────────────────────────────
 echo ""
