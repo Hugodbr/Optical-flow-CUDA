@@ -3,9 +3,19 @@
 #include <chrono>
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/core/cuda.hpp>
+#include <cuda_runtime.h>
 
 #include "cuda/lucas_kanade.h"
+
+#define CUDA_CHECK(call)                                                \
+    do {                                                                \
+        cudaError_t _e = (call);                                        \
+        if (_e != cudaSuccess) {                                        \
+            std::cerr << "[CUDA] " << cudaGetErrorString(_e)           \
+                      << " at " << __FILE__ << ":" << __LINE__ << "\n";\
+            std::exit(1);                                               \
+        }                                                               \
+    } while(0)
 
 struct AppConfig {
     std::string inputPath;
@@ -68,9 +78,17 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // GPU buffers — prev/curr are grayscale (1 byte/px), vis is BGR (3 bytes/px)
+    const size_t grayBytes = static_cast<size_t>(width) * height;
+    const size_t bgrBytes  = grayBytes * 3;
+
+    unsigned char *d_prev, *d_curr, *d_vis;
+    CUDA_CHECK(cudaMalloc(&d_prev, grayBytes));
+    CUDA_CHECK(cudaMalloc(&d_curr, grayBytes));
+    CUDA_CHECK(cudaMalloc(&d_vis,  bgrBytes));
+
     LKConfig lkCfg;
-    cv::cuda::GpuMat d_prev, d_curr, d_vis;
-    cv::Mat frame, gray, output;
+    cv::Mat frame, gray, output(height, width, CV_8UC3);
     bool firstFrame = true;
     int  frameIdx   = 0;
 
@@ -78,18 +96,32 @@ int main(int argc, char** argv) {
 
     while (cap.read(frame)) {
         cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-        d_curr.upload(gray);
+
+        // Upload: handle cv::Mat row padding with cudaMemcpy2D
+        CUDA_CHECK(cudaMemcpy2D(
+            d_curr, width,         // dst (contiguous), dst pitch
+            gray.data, gray.step,  // src, src pitch (may have padding)
+            width, height,
+            cudaMemcpyHostToDevice
+        ));
 
         if (firstFrame) {
-            d_curr.copyTo(d_prev);
+            CUDA_CHECK(cudaMemcpy(d_prev, d_curr, grayBytes, cudaMemcpyDeviceToDevice));
             output = cv::Mat::zeros(height, width, CV_8UC3);
             firstFrame = false;
         } else {
-            runLucasKanade(d_prev, d_curr, d_vis, lkCfg);
-            d_vis.download(output);
+            runLucasKanade(d_prev, d_curr, d_vis, width, height, lkCfg);
+
+            // Download: d_vis is contiguous, output.step may have padding
+            CUDA_CHECK(cudaMemcpy2D(
+                output.data, output.step,  // dst, dst pitch
+                d_vis, width * 3,          // src (contiguous), src pitch
+                width * 3, height,
+                cudaMemcpyDeviceToHost
+            ));
         }
 
-        d_curr.copyTo(d_prev);
+        CUDA_CHECK(cudaMemcpy(d_prev, d_curr, grayBytes, cudaMemcpyDeviceToDevice));
         writer.write(output);
 
         ++frameIdx;
@@ -104,6 +136,9 @@ int main(int argc, char** argv) {
 
     std::cout << "\nDone. " << frameIdx << " frames -> " << app.outputPath << "\n";
 
+    cudaFree(d_prev);
+    cudaFree(d_curr);
+    cudaFree(d_vis);
     cap.release();
     writer.release();
     return 0;
