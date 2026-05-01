@@ -6,7 +6,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
 BINARY="./build/optical_flow"
-INPUT_DIR="video_input_liz"
+INPUT_DIR="video_input"
 
 if [ ! -f "${BINARY}" ]; then
     echo "ERROR: binary not found. Run scripts/jetson/build.sh first."

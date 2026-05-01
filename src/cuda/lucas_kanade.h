@@ -5,7 +5,7 @@
 struct LKConfig {
     int   windowSize   = 7;
     float detThreshold = 1e-3f;
-    float maxFlow      = 20.f;
+    float maxFlow      = 1.0f;
 };
 
 struct LKTiming {
