@@ -1,0 +1,9 @@
+%YAML 1.2
+---
+# Generic camera configuration (fallback)
+
+camera:
+  source: 0
+  width:  1280
+  height: 720
+  fps:    30

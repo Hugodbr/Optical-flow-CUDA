@@ -1,0 +1,16 @@
+%YAML 1.2
+---
+# Camera Configuration for CPU Optical Flow
+
+camera:
+  # Source can be:
+  #   - Device index (integer):  0, 1, 2, ...
+  #   - URL (string):            "http://...", "rtsp://...", or Droidcam IP
+  source: 0               # Default: first camera device
+
+  # Requested resolution (device may not honor it)
+  width:  1280
+  height: 720
+
+  # Requested frame rate
+  fps:    30
